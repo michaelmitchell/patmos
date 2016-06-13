@@ -1,68 +1,46 @@
 import path from 'path';
 
-export function load_all_from_config(scope, config) {
-  // attach clients from config
-  if (config.clients) {
-    for (let client of config.clients) {
-      if (typeof client === 'object') {
-        let params = load_from_config(client);
-
-        if (params && params.length > 0) {
-          scope.attach.apply(scope, params);
-        }
-      }
-      else if (typeof client === 'function') {
-        scope.attach.apply(scope, [client]);
-      }
-    }
-  }
-
-  // add methods from config
-  if (config.methods) {
-    for (let method of config.methods) {
-      if (typeof method === 'object') {
-        let params = load_from_config(method);
-
-        if (params && params.length > 0) {
-          scope.add.apply(scope, params);
-        }
-      }
-    }
-  }
-
-  // attach middleware from config
-  if (config.middleware) {
-    for (let middleware of config.middleware) {
+//
+export function apply_middlewares(fn, scope) {
+  return (middlewares) => {
+    for (let middleware of middlewares) {
       if (typeof middleware === 'object') {
         let params = load_from_config(middleware);
 
         if (params && params.length > 0) {
-          scope.use.apply(scope, params);
+          fn.apply(scope, params);
         }
       }
       else if (typeof middleware === 'function') {
-        scope.use.apply(scope, [middleware]);
+        fn.apply(scope, [middleware]);
       }
     }
+  }
+}
+
+//
+export function load_all_from_config(scope, config) {
+  // attach clients from config
+  if (config.clients) {
+    apply_middlewares(scope.attach, scope)(config.clients);
+  }
+
+  // add methods from config
+  if (config.methods) {
+    apply_middlewares(scope.add, scope)(config.methods);
+  }
+
+  // attach middleware from config
+  if (config.middleware) {
+    apply_middlewares(scope.use, scope)(config.middleware);
   }
 
   // attach servers from config
   if (config.servers) {
-    for (let server of config.servers) {
-      if (typeof server === 'object') {
-        let params = load_from_config(server);
-
-        if (params && params.length > 0) {
-          scope.expose.apply(scope, params);
-        }
-      }
-      else if (typeof server === 'function') {
-        scope.expose.apply(scope, [server]);
-      }
-    }
+    apply_middlewares(scope.expose, scope)(config.servers);
   }
 
-  // parse scoped configs
+  // load scopes config recursive
   if (config.scopes) {
     for (let scopeConfig of config.scopes) {
       let pattern = scopeConfig.pattern || {};

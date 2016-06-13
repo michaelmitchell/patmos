@@ -1,3 +1,8 @@
+import polyfill from 'babel-polyfill';
+import { install } from 'source-map-support';
+
+install();
+
 // modules
 import _ from 'lodash';
 import fs from 'fs';
