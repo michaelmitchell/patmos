@@ -1,32 +1,15 @@
+// modules
 import _ from 'lodash';
+import fs from 'fs';
 import patrun from 'patrun';
-import winston from 'winston';
-import defaultClient from './middleware/patmos-default-client';
+import yaml from 'js-yaml';
 
-//
-export const defaults = {
-  // Glob matching using gex.
-  gex: true,
-  log: {
-    level: 'warn'
-  }
-};
+// helpers
+import { load_all_from_config } from './lib/config';
+import logger from './lib/logger';
 
-//
-export let log = new winston.Logger({
-  transports: [
-    new winston.transports.Console({
-      timestamp: () => new Date().toISOString(),
-      formatter: (options) => {
-        let level = options.level.toUpperCase();
-        let message = (undefined !== options.message ? options.message : '')
-        let metadata = (options.meta && Object.keys(options.meta).length ? JSON.stringify(options.meta) : '');
-
-        return '[' + options.timestamp() +'] ' + level + ': ' + message + ' ' + metadata;
-      }
-    })
-  ]
-});
+// load default config
+export const defaults = yaml.safeLoad(fs.readFileSync('./config/default.yaml'));
 
 /**
  *
@@ -42,18 +25,21 @@ export class Patmos {
   constructor(options) {
     this.options = _.assign(defaults, options);
 
-    // change logging level
-    log.level = options.log.level;
-
     //
-    this.logger = log;
+    this.log = logger;
+    this.log.level = this.options.log.level;
+
+    // method store
     this.store = patrun({gex: this.options.gex});
 
-    // middlewares
+    // middleware
     this.clients = [];
     this.middleware = [];
 
-    this.attach(defaultClient);
+    // root config scope
+    let scope = this.scope();
+
+    load_all_from_config(scope, options);
   }
 
   /**
@@ -64,7 +50,7 @@ export class Patmos {
    * @return {type}
    */
   add(pattern, method) {
-    log.debug('add()', pattern);
+    this.log.debug('add()', pattern);
 
     //@TODO
     // - validate pattern
@@ -89,12 +75,10 @@ export class Patmos {
       pattern = {};
     }
 
-    log.debug('attach()', pattern, middleware ? middleware.name : 'unknown');
+    this.log.debug('attach()', pattern, middleware ? middleware.name : 'unknown');
 
-    //TODO
-    // - validate middleware creator
-    // - validate returned middleware
-    let fn = middleware(this.scope(pattern)); //init middleware
+    let scope = this.scope(pattern, ['add', 'exec', 'find', 'has', 'list', 'remove']);
+    let fn = middleware(scope);
 
     // only add middleware that returns a function
     if (typeof fn === 'function') {
@@ -112,15 +96,9 @@ export class Patmos {
    * @return {type}
    */
   async exec(message) {
-    log.debug('exec()', message);
+    this.log.debug('exec()', message);
 
-    //@TODO
-    // - validate message
-    // - validate client
-    // - validate results
-    // - replace middleware with pattern matching library with "findAll"
-
-    //reverse pattern match
+    //reverse pattern match for middleware
     let test = patrun({gex: this.options.gex}).add(message, true);
 
     //
@@ -156,11 +134,11 @@ export class Patmos {
         }
       }
       catch (e) {
-        log.error('exec() request middleware error', e.message);
+        throw e;
       }
     }
 
-    // result from client middleware
+    // default
     let result = null;
 
     for (let request of clients) {
@@ -171,23 +149,23 @@ export class Patmos {
           result = await response(result) || null;
 
           if (result !== null) {
-            break;
+            break; // first result is used
           }
         }
       }
       catch (e) {
-        log.error('exec() client middleware error', e.message);
+        throw e;
       }
     }
 
-    // apply response middleware
+    // apply response middleware before returning
     if (result) {
       for (let response of responses) {
         try {
           await response(result);
         }
         catch (e) {
-          log.error('exec() response middleware error', e.message);
+          throw e;
         }
       }
     }
@@ -213,7 +191,7 @@ export class Patmos {
    * @return {type}
    */
   find(pattern) {
-    log.debug('find()', pattern);
+    this.log.debug('find()', pattern);
 
     return this.store.find(pattern);
   }
@@ -225,19 +203,19 @@ export class Patmos {
    * @return {type}         description
    */
   has(pattern) {
-    log.debug('has()', pattern);
+    this.log.debug('has()', pattern);
 
     return !!this.store.find(pattern);
   }
 
   /**
-   * list
+   * list- list methods by a pattern subset
    *
    * @param  {type} pattern
    * @return {type}
    */
   list(pattern) {
-    log.debug('list()', pattern);
+    this.log.debug('list()', pattern);
 
     return this.store.list(pattern);
   }
@@ -249,7 +227,7 @@ export class Patmos {
    * @return {type}         description
    */
   remove(pattern) {
-    log.debug('remove()', pattern);
+    this.log.debug('remove()', pattern);
 
     this.store.remove(pattern);
 
@@ -262,30 +240,41 @@ export class Patmos {
    * @param  {type} pattern description
    * @return {type}         description
    */
-  scope(pattern = {}) {
-    log.debug('scope()', pattern);
+  scope(pattern = {}, methods = null) {
+    this.log.debug('scope()', pattern);
 
-    // create
-    let fn = (fn, args, chain = false) => {
+    // init scope
+    let scope = {
+      parent: this, // access to parent scope
+      pattern: pattern // the pattern this scope is tied to
+    };
+
+    // create scoped functions
+    let scopify = (fn, args, chain = false) => {
       let [x, ...y] = args;
       let result = fn.call(this, {...x, ...pattern}, ...y);
       return chain ? scope : result;
     };
 
     //
-    let scope = {
-      pattern: pattern, // the pattern this scope is tied to
-      add: (...args) => fn(this.add, args, true),
-      attach: (p, m) => fn(this.use, m ? [p, m] : [{}, p], true),
+    scope = _.assign(scope, {
+      add: (...args) => scopify(this.add, args, true),
+      attach: (p, m) => scopify(this.use, m ? [p, m] : [{}, p], true),
       exec: async (m) => await this.exec({...m, ...pattern}),
-      expose: (p, m) => fn(this.expose, m ? [p, m] : [{}, p], true),
-      find: (...args) => fn(this.find, args),
-      has: (...args) => fn(this.has, args),
-      list: (...args) => fn(this.list, args),
-      remove: (...args) => fn(this.remove, args, true),
-      use: (p, m) => fn(this.use, m ? [p, m] : [{}, p], true),
-    };
-    
+      expose: (p, m) => scopify(this.expose, m ? [p, m] : [{}, p], true),
+      find: (...args) => scopify(this.find, args),
+      has: (...args) => scopify(this.has, args),
+      list: (...args) => scopify(this.list, args),
+      remove: (...args) => scopify(this.remove, args, true),
+      scope: (...args) => scopify(this.scope, args),
+      use: (p, m) => scopify(this.use, m ? [p, m] : [{}, p], true)
+    });
+
+    //
+    if (typeof methods === 'array') {
+      scope = _.pick(scope, methods);
+    }
+
     return scope;
   }
 
@@ -302,14 +291,12 @@ export class Patmos {
       pattern = {};
     }
 
-    log.debug('use()', pattern, middleware ? middleware.name : 'unknown');
+    this.log.debug('use()', pattern, middleware ? middleware.name : 'unknown');
 
-    //TODO
-    // - validate middleware creator
-    // - validate returned middleware
-    let fn = middleware(this.scope(pattern)); //init middleware
+    let scope = this.scope(pattern, ['add', 'exec', 'find', 'has', 'list', 'remove']);
+    let fn = middleware(scope);
 
-    // only add middleware that returns a function
+    // only add middleware that returns a request function
     if (typeof fn === 'function') {
       this.middleware.push([pattern, fn]);
     }
