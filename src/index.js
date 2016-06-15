@@ -5,11 +5,16 @@ import patrun from 'patrun';
 import yaml from 'js-yaml';
 
 // helpers
+import { scopify, scopify_chainable } from './lib/scope';
 import { load_all_from_config } from './lib/config';
 import logger from './lib/logger';
 
 // load default config
 export const defaults = yaml.safeLoad(fs.readFileSync('./config/default.yaml'));
+
+// different scope tyopes
+export const SCOPE_DEFAULT = 'default';
+export const SCOPE_MIDDLEWARE = 'middleware';
 
 /**
  *
@@ -37,9 +42,7 @@ export class Patmos {
     this.middleware = [];
 
     // root config scope
-    let scope = this.scope();
-
-    load_all_from_config(scope, options);
+    load_all_from_config(this.scope(), options);
   }
 
   /**
@@ -73,7 +76,7 @@ export class Patmos {
       pattern = {};
     }
 
-    let scope = this.scope(pattern, ['add', 'exec', 'find', 'has', 'list', 'remove']);
+    let scope = this.scope(pattern, SCOPE_MIDDLEWARE);
     let fn = middleware(scope);
 
     // only add middleware that returns a function
@@ -91,7 +94,7 @@ export class Patmos {
    * @param  {type} message
    * @return {type}
    */
-  async run(message) {
+  async exec(message) {
     //reverse pattern match for middleware
     let test = patrun({gex: this.options.gex}).add(message, true);
 
@@ -226,37 +229,56 @@ export class Patmos {
    * @param  {type} pattern description
    * @return {type}         description
    */
-  scope(pattern = {}, methods = null) {
+  scope(pattern = {}, type = SCOPE_DEFAULT) {
     // init scope
     let scope = {
       parent: this, // access to parent scope
       pattern: pattern // the pattern this scope is tied to
     };
 
-    // create scoped functions
-    let scopify = (fn, args, chain = false) => {
-      let [x, ...y] = args;
-      let result = fn.call(this, {...x, ...pattern}, ...y);
-      return chain ? scope : result;
+    // scopified api functions
+    let api = {
+      add: (...args) => scopify_chainable(this.add, scope, args),
+      attach: (p, m) => scopify_chainable(this.attach, scope, m ? [p, m] : [{}, p]),
+      expose: (p, m) => scopify_chainable(this.expose, scope, m ? [p, m] : [{}, p]),
+      find: (...args) => scopify(this.find, scope, args),
+      has: (...args) => scopify(this.has, scope, args),
+      list: (...args) => scopify(this.list, scope, args),
+      remove: (...args) => scopify_chainable(this.remove, scope, args),
+      scope: (...args) => scopify(this.scope, scope, args),
+      use: (p, m) => scopify_chainable(this.use, scope, m ? [p, m] : [{}, p])
     };
 
     //
-    scope = _.assign(scope, {
-      add: (...args) => scopify(this.add, args, true),
-      attach: (p, m) => scopify(this.attach, m ? [p, m] : [{}, p], true),
-      exec: async (m) => await this.exec({...m, ...pattern}),
-      expose: (p, m) => scopify(this.expose, m ? [p, m] : [{}, p], true),
-      find: (...args) => scopify(this.find, args),
-      has: (...args) => scopify(this.has, args),
-      list: (...args) => scopify(this.list, args),
-      remove: (...args) => scopify(this.remove, args, true),
-      scope: (...args) => scopify(this.scope, args),
-      use: (p, m) => scopify(this.use, m ? [p, m] : [{}, p], true)
-    });
+    switch (type) {
+      case SCOPE_DEFAULT:
+        // default scope includes all scopified api methods
+        _.assign(scope, api, {
+          exec: (...args) => scopify(this.exec, scope, args)
+        });
+        break;
+      case SCOPE_MIDDLEWARE:
+        // middleware gets limited scope
+        _.assign(scope, _.pick(api, ['add', 'find', 'has', 'list', 'remove']), {
+          // middleware exec function is not scopified to prevent recursion
+          exec: async (m) => {
+            // exec cannot be called with a subset of the scopes pattern
+            let test = patrun({gex: this.options.gex}).add(m, true);
 
-    //
-    if (typeof methods === 'array') {
-      scope = _.pick(scope, methods);
+            if (test.list(pattern).length > 0) {
+              this.log.warn('executing a subset of scope in middleware is not allowed, use __dangerouslyExec instead.', {
+                scope: pattern,
+                message: m
+              });
+            }
+            else {
+              return await this.exec(m);
+            }
+          },
+          // override scope check by using root exec function
+          __dangerouslyExec: this.exec.bind(this)
+        });
+        break;
     }
 
     return scope;
@@ -275,7 +297,7 @@ export class Patmos {
       pattern = {};
     }
 
-    let scope = this.scope(pattern, ['add', 'exec', 'find', 'has', 'list', 'remove']);
+    let scope = this.scope(pattern, SCOPE_MIDDLEWARE);
     let fn = middleware(scope);
 
     // only add middleware that returns a request function
