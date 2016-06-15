@@ -13,8 +13,10 @@ import logger from './lib/logger';
 export const defaults = yaml.safeLoad(fs.readFileSync('./config/default.yaml'));
 
 // different scope tyopes
+export const SCOPE_CLIENT = 'client';
 export const SCOPE_DEFAULT = 'default';
 export const SCOPE_MIDDLEWARE = 'middleware';
+export const SCOPE_SERVER = 'server';
 
 /**
  *
@@ -76,7 +78,7 @@ export class Patmos {
       pattern = {};
     }
 
-    let scope = this.scope(pattern, SCOPE_MIDDLEWARE);
+    let scope = this.scope(pattern, SCOPE_CLIENT);
     let fn = middleware(scope);
 
     // only add middleware that returns a function
@@ -178,7 +180,16 @@ export class Patmos {
    * @return {type}
    */
   expose(pattern, middleware) {
-    return this.use(pattern, middleware);
+    if (!middleware) {
+      middleware = pattern;
+      pattern = {};
+    }
+
+    let scope = this.scope(pattern, SCOPE_SERVER);
+
+    middleware(scope);
+
+    return this;
   }
 
   /**
@@ -257,6 +268,13 @@ export class Patmos {
           exec: (...args) => scopify(this.exec, scope, args)
         });
         break;
+      // server middleware limited scope and scopified exec method
+      case SCOPE_SERVER:
+        _.assign(scope, _.pick(api, ['add', 'attach', 'find', 'has', 'list', 'remove', 'use']), {
+          exec: (...args) => scopify(this.exec, scope, args)
+        });
+        break;
+      case SCOPE_CLIENT:
       case SCOPE_MIDDLEWARE:
         // middleware gets limited scope
         _.assign(scope, _.pick(api, ['add', 'find', 'has', 'list', 'remove']), {
