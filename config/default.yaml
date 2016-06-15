@@ -1,5 +1,5 @@
 ---
-gex: true,
+gex: true
 log:
   level: warn
 clients:

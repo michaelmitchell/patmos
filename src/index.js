@@ -85,13 +85,13 @@ export class Patmos {
   }
 
   /**
-   * exec
+   * run
    *
    * @async
    * @param  {type} message
    * @return {type}
    */
-  async exec(message) {
+  async run(message) {
     //reverse pattern match for middleware
     let test = patrun({gex: this.options.gex}).add(message, true);
 
@@ -243,7 +243,7 @@ export class Patmos {
     //
     scope = _.assign(scope, {
       add: (...args) => scopify(this.add, args, true),
-      attach: (p, m) => scopify(this.use, m ? [p, m] : [{}, p], true),
+      attach: (p, m) => scopify(this.attach, m ? [p, m] : [{}, p], true),
       exec: async (m) => await this.exec({...m, ...pattern}),
       expose: (p, m) => scopify(this.expose, m ? [p, m] : [{}, p], true),
       find: (...args) => scopify(this.find, args),

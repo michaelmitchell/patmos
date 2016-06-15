@@ -47,7 +47,7 @@
     "babel-preset-stage-3": "^6.5.0"
   },
   "scripts": {
-    "build": "./node_modules/babel-cli/bin/babel.js src -d build --source-maps=inline",
+    "build": "rm -rf ./build && ./node_modules/babel-cli/bin/babel.js src -d build --source-maps=inline",
     "test": "echo \"Error: no test specified\" && exit 1",
     "watch": "./node_modules/babel-cli/bin/babel.js src -d build --watch --source-maps=inline"
   }
