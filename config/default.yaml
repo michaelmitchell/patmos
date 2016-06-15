@@ -3,4 +3,4 @@ gex: true,
 log:
   level: warn
 clients:
-  - module: ./middleware/patmos-default-client
+  - module: patmos-default-client

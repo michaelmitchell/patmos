@@ -1,8 +1,3 @@
-import polyfill from 'babel-polyfill';
-import { install } from 'source-map-support';
-
-install();
-
 // modules
 import _ from 'lodash';
 import fs from 'fs';
@@ -55,8 +50,6 @@ export class Patmos {
    * @return {type}
    */
   add(pattern, method) {
-    this.log.debug('add()', pattern);
-
     //@TODO
     // - validate pattern
     // - check existing pattern
@@ -80,8 +73,6 @@ export class Patmos {
       pattern = {};
     }
 
-    this.log.debug('attach()', pattern, middleware ? middleware.name : 'unknown');
-
     let scope = this.scope(pattern, ['add', 'exec', 'find', 'has', 'list', 'remove']);
     let fn = middleware(scope);
 
@@ -101,8 +92,6 @@ export class Patmos {
    * @return {type}
    */
   async exec(message) {
-    this.log.debug('exec()', message);
-
     //reverse pattern match for middleware
     let test = patrun({gex: this.options.gex}).add(message, true);
 
@@ -196,8 +185,6 @@ export class Patmos {
    * @return {type}
    */
   find(pattern) {
-    this.log.debug('find()', pattern);
-
     return this.store.find(pattern);
   }
 
@@ -208,8 +195,6 @@ export class Patmos {
    * @return {type}         description
    */
   has(pattern) {
-    this.log.debug('has()', pattern);
-
     return !!this.store.find(pattern);
   }
 
@@ -220,8 +205,6 @@ export class Patmos {
    * @return {type}
    */
   list(pattern) {
-    this.log.debug('list()', pattern);
-
     return this.store.list(pattern);
   }
 
@@ -232,8 +215,6 @@ export class Patmos {
    * @return {type}         description
    */
   remove(pattern) {
-    this.log.debug('remove()', pattern);
-
     this.store.remove(pattern);
 
     return this;
@@ -246,8 +227,6 @@ export class Patmos {
    * @return {type}         description
    */
   scope(pattern = {}, methods = null) {
-    this.log.debug('scope()', pattern);
-
     // init scope
     let scope = {
       parent: this, // access to parent scope
@@ -295,8 +274,6 @@ export class Patmos {
       middleware = pattern;
       pattern = {};
     }
-
-    this.log.debug('use()', pattern, middleware ? middleware.name : 'unknown');
 
     let scope = this.scope(pattern, ['add', 'exec', 'find', 'has', 'list', 'remove']);
     let fn = middleware(scope);

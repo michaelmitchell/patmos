@@ -1,14 +1,40 @@
 {
   "name": "patmos",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "0.1.0",
+  "description": "flexible pattern matching microservice toolkit",
+  "homepage": "https://github.com/michaelmitchell/patmos",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelmitchell/patmos.git"
+  },
+  "bugs": {
+    "url": "https://github.com/michaelmitchell/patmos/issues"
+  },
+  "license": "MIT",
+  "keywords": [
+    "patmos",
+    "pattern",
+    "matcher",
+    "matching",
+    "microservice",
+    "service"
+  ],
+  "author": {
+    "name": "Michael Mitchell",
+    "email": "michael@michaelmitchell.co.nz"
+  },
+  "maintainers": [
+    {
+      "name": "michaelmitchell",
+      "email": "michael@michaelmitchell.co.nz"
+    }
+  ],
+  "main": "build/index.js",
   "dependencies": {
     "js-yaml": "^3.6.1",
     "lodash": "^4.13.1",
+    "patmos-default-client": "^0.1.0",
     "patrun": "^0.5.0",
-    "source-map-support": "^0.4.0",
-    "webpack": "^1.13.1",
     "winston": "^2.2.0"
   },
   "devDependencies": {
@@ -16,15 +42,13 @@
     "babel-core": "^6.9.1",
     "babel-loader": "^6.2.4",
     "babel-plugin-transform-object-rest-spread": "^6.8.0",
-    "babel-polyfill": "^6.9.1",
+    "babel-plugin-transform-runtime": "^6.9.0",
     "babel-preset-es2015": "^6.9.0",
     "babel-preset-stage-3": "^6.5.0"
   },
   "scripts": {
-    "start": "node build/main.js",
+    "build": "./node_modules/babel-cli/bin/babel.js src -d build --source-maps=inline",
     "test": "echo \"Error: no test specified\" && exit 1",
     "watch": "./node_modules/babel-cli/bin/babel.js src -d build --watch --source-maps=inline"
-  },
-  "author": "",
-  "license": "ISC"
+  }
 }
