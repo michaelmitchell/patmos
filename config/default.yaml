@@ -1,0 +1,6 @@
+---
+gex: true
+log:
+  level: info
+clients:
+  - module: patmos-default-client
