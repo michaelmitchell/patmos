@@ -1,6 +1,6 @@
 {
   "name": "patmos",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "flexible pattern matching microservice toolkit",
   "homepage": "https://github.com/michaelmitchell/patmos",
   "repository": {
