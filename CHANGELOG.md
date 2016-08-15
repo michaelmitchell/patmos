@@ -11,7 +11,7 @@ All notable changes to this project will be documented in this file.
 ### Removed
 - Nothing removed
 
-[Unreleased]: https://github.com/michaelmitchell/patmos/compare/release-0.1.0...HEAD
+[Unreleased]: https://github.com/michaelmitchell/patmos/compare/release-0.1.1...HEAD
 
 <!---
 [Unreleased]: https://github.com/michaelmitchell/patmos/compare/release-0.1.0...HEAD
