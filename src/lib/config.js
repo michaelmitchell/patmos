@@ -1,21 +1,21 @@
-import path from 'path';
+import path from "path";
 
 //
 export function apply_middlewares(fn, scope) {
   return (middlewares) => {
     for (let middleware of middlewares) {
-      if (typeof middleware === 'object') {
+      if (typeof middleware === "object") {
         let params = load_from_config(middleware);
 
         if (params && params.length > 0) {
           fn.apply(scope, params);
         }
       }
-      else if (typeof middleware === 'function') {
+      else if (typeof middleware === "function") {
         fn.apply(scope, [middleware]);
       }
     }
-  }
+  };
 }
 
 //
@@ -48,7 +48,7 @@ export function load_all_from_config(scope, config) {
 
       delete scopeConfig.pattern;
 
-      load_all_from_config(newScope, scopeConfig)
+      load_all_from_config(newScope, scopeConfig);
     }
   }
 }
@@ -59,29 +59,29 @@ export function load_from_config(config) {
   let module = config.module;
 
   // load node modul if defined
-  if (typeof module === 'string') {
+  if (typeof module === "string") {
     // include config modules relative to the main module
-    if (module.substr(0, 1) === '.') {
+    if (module.substr(0, 1) === ".") {
       let root = path.dirname(require.main.filename);
-      module = require(root + '/' + module);
+      module = require(root + "/" + module);
     }
     else {
       module = require(module);
     }
 
     if (!module) {
-      throw 'module not found';
+      throw "module not found";
     }
   }
 
   //
   let method = config.method;
 
-  if (module && typeof method === 'string') {
-    method = module[method || 'default'];
+  if (module && typeof method === "string") {
+    method = module[method || "default"];
   }
-  else if (module && typeof method === 'object') {
-    method = module[method.name || 'default'].apply({}, method.args || []);
+  else if (module && typeof method === "object") {
+    method = module[method.name || "default"].apply({}, method.args || []);
   }
   else if (module) {
     method = module.default;

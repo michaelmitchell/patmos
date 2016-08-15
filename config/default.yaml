@@ -1,6 +1,6 @@
 ---
 gex: true
 log:
-  level: warn
+  level: info
 clients:
   - module: patmos-default-client
