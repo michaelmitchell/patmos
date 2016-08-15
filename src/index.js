@@ -279,6 +279,7 @@ export class Patmos {
     // init scope
     let scope = {
       parent: this, // access to parent scope
+      type: type, // to test the scope type
       pattern: pattern, // the pattern this scope is tied to
       log: this.log // easier access to logging functions
     };

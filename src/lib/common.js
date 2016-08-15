@@ -4,7 +4,7 @@ export function method_name(method) {
 }
 
 //
-export function pattern_name(pattern) {
+export function pattern_name(pattern = {}) {
   if (Object.keys(pattern).length > 0) {
     return "{" + Object.keys(pattern).map(function(k) {
       return k + "=" + pattern[k];
