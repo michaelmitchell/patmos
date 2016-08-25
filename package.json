@@ -55,26 +55,28 @@
     "eslint": "^2.13.0",
     "isparta": "^4.0.0",
     "mocha": "^2.5.3",
+    "ramda": "^0.22.1",
+    "ramda-fantasy": "^0.6.1",
     "snyk": "^1.14.3"
   },
   "scripts": {
     "prebuild": "npm run build:clean && npm run test",
     "build": "npm run build:js",
-      "build:clean": "rm -rf ./build",
-      "build:js": "./node_modules/.bin/babel src -d build --source-maps=inline",
+    "build:clean": "rm -rf ./build",
+    "build:js": "./node_modules/.bin/babel src -d build --source-maps=inline",
     "docs": "./node_modules/.bin/esdoc -c ./esdoc.json",
     "lint": "./node_modules/.bin/eslint src test",
-      "lint:fix": "npm run lint -- --fix",
+    "lint:fix": "npm run lint -- --fix",
     "snyk": "./node_modules/.bin/snyk",
-      "snyk:auth": "npm run -s snyk -- auth $SNYK_TOKEN",
-      "snyk:monitor": "npm run snyk -- monitor",
-      "snyk:test": "npm run snyk -- test",
-      "snyk:wizard": "npm run snyk -- wizard",
+    "snyk:auth": "npm run -s snyk -- auth $SNYK_TOKEN",
+    "snyk:monitor": "npm run snyk -- monitor",
+    "snyk:test": "npm run snyk -- test",
+    "snyk:wizard": "npm run snyk -- wizard",
     "pretest": "npm run snyk:test && npm run lint",
     "test": "npm run test:js",
-      "test:cov": "cat ./coverage/lcov.info | ./node_modules/coveralls/bin/coveralls.js",
-      "test:js": "NODE_ENV=test ./node_modules/.bin/babel-node ./node_modules/.bin/isparta cover ./node_modules/.bin/_mocha -- --recursive",
+    "test:cov": "cat ./coverage/lcov.info | ./node_modules/coveralls/bin/coveralls.js",
+    "test:js": "NODE_ENV=test ./node_modules/.bin/babel-node ./node_modules/.bin/isparta cover ./node_modules/.bin/_mocha -- --recursive",
     "watch": "npm run watch:js",
-      "watch:js": "npm run build:js -- --watch"
+    "watch:js": "npm run build:js -- --watch"
   }
 }
