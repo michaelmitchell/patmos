@@ -15,17 +15,11 @@ const isFunctor = R.both(isObject, R.hasIn('map'));
 
 // errors
 const A_NOT_ALLOWED = 'A_NOT_ALLOWED';
-const B_NOT_ALLOWED = 'A_NOT_ALLOWED';
+const B_NOT_ALLOWED = 'B_NOT_ALLOWED';
 
 // logging functions
-const logAfter = R.curry((fn, x) => {
-  return compose(tap(fn), x);
-});
-
-//
-const logBefore = R.curry((fn, x) => {
-  return compose(x, tap(fn));
-});
+const logAfter = R.curry((fn, x) => compose(tap(fn), x));
+const logBefore = R.curry((fn, x) => compose(x, tap(fn)));
 
 //
 const loggable = compose(
@@ -45,14 +39,11 @@ const maybeOf = (x) => isFunctor(x) ? x : Maybe.of(x);
 const maybeText  = (x) => isString(x) ? Just(x) : Nothing();
 
 // validate with Either monad
-const validate = (x) => {
-  if (x === 'a')
-    return Failure(A_NOT_ALLOWED);
-  else if (x === 'b')
-    return Failure(B_NOT_ALLOWED);
-  else
-    return Success(x);
-};
+const validate = R.cond([
+  [R.equals('a'), x => Failure(A_NOT_ALLOWED)],
+  [R.equals('b'), x => Failure(B_NOT_ALLOWED)],
+  [true, x => Success(x)]
+]);
 
 // format
 const format = (x) => R.toUpper(x);
@@ -74,6 +65,6 @@ const handleRequest = pipe(
     (handle)
 );
 
-let res = handleRequest('a');
+let res = handleRequest('b');
 
 console.log('res', res);
