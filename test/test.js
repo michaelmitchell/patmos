@@ -44,3 +44,38 @@ let main = async () => {
 };
 
 main();*/
+
+/*
+
+const attach = (state, {pattern, middleware}) => {
+  return state;
+};
+
+const exec = (state, {message}) => {
+  return state;
+};
+
+const expose = (state, {pattern, middleware}) => {
+  return state;
+};
+
+const find = (state, {pattern}) => {
+  return state;
+};
+
+const has = (state, {pattern}) => {
+  return state;
+};
+
+const list = (state, {pattern}) => {
+  return state;
+};
+
+const remove = (state, {pattern}) => {
+  return state;
+};
+
+const use = (state, {pattern}) => {
+  return state;
+};
+*/

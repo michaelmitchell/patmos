@@ -1,7 +1,7 @@
 import { expect } from "chai";
 
 //
-import * as common from "../../src/lib/config"
+import * as common from "../../src/lib/config";
 
 //
 describe("lib", () => {

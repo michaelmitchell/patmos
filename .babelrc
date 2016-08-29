@@ -6,7 +6,8 @@
 				"regenerator": true
 			}
 		],
-		"transform-object-rest-spread"
+		"transform-object-rest-spread",
+		"pipe-composition"
 	],
 	"presets": [
 		"es2015",
