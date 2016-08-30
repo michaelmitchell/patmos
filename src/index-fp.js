@@ -128,18 +128,19 @@ const add = curry << function (state, pattern, method) {
  * @return {obejct}
  */
 const attach = curry << function (state, pattern, method) {
-  return state >> update('servers', append({pattern, method}));
+  return state >> update('clients', append({pattern, method}));
 }
 
 //
 const observableFactory = function (fn) {
-  return fn.length === 2
-    ? Rx.Observable.bindCallback(fn)
-    : fn
+  return fn.length === 2 ? Rx.Observable.bindCallback(fn) : fn;
 }
 
 //
-const exec = curry << function (state, message) {
+const mergeStream = (stream, fn) => stream.mergeMap(val => fn(val));
+
+//
+const exec = curry << async function (state, message) {
   const reqId = nid(8); // for logging
 
   log("exec " + reqId + " " + JSON.stringify(message));
@@ -159,18 +160,35 @@ const exec = curry << function (state, message) {
     >> map(x => service >> locateMethod(x));
 
   log("exec " + reqId + " matched " + clients.length + " clients")
-
-  const stream = middlewares
-    >> map(([ req, res ]) => observableFactory(req));
+ 
+  //
+  const prepareRequest = middlewares
+    >> map(([ req ]) => observableFactory(req))
+    >> reduce(mergeStream, Rx.Observable.of(message)); 
     
-  //const res = await prom;
+  const request = await prepareRequest.toPromise(); 
 
-  //console.log('res', res);
+  console.log('request', request);
 
-  //const responses = middleware
-  //console.log('fn', store.find(message));
+  //
+  const getResponse = clients
+    >> map((req) => observableFactory(req))
+    >> reduce(mergeStream, Rx.Observable.of(request));
 
-  return message;
+  const response = await getResponse.toPromise();
+  
+  console.log('response', response);
+
+  //
+  const prepareResponse = middlewares
+    >> map(([ _, res ]) => observableFactory(res))
+    >> reduce(mergeStream, Rx.Observable.of(response)); 
+  
+  const result = await prepareResponse.toPromise();
+
+  console.log('result', result);
+
+  return result;
 }
 
 const expose = curry << function (state, pattern, method) {
@@ -305,7 +323,7 @@ const callbackmw = (service) => [
     console.log('req 1', req);
     callback(assoc("req1", true, req));
   },
-  async (res) => {
+  (res, callback) => {
     console.log('res 1');
     callback(assoc("res", true, res));
   }
@@ -323,7 +341,7 @@ const promisemw = (service) => [
   }
 ];
 
-const client = (service) => (req) => {
+const client = (service) => async (req) => {
   return {body: "hello world"};
 }
 
