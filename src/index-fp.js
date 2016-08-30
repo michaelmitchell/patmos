@@ -2,16 +2,26 @@
 import fs from "fs";
 import path from "path";
 import patrun from "patrun";
-import R, {apply, append, assoc, curry, equals, evolve, filter, forEach, is, map, merge } from "ramda";
+import nid from "nid";
+import R, {__, apply, append, assoc, curry, dissoc, equals, evolve, filter, forEach,
+  head, is, lens, lensPath, lensProp, map, merge, tail, transpose, reduce, over,
+  partial, prop, tap } from "ramda";
+import Rx from 'rxjs/Rx';
 import yaml from "js-yaml";
 
-// type checks
-const isFunction = is(Function);
-
-// default config
-export const defaults = "./config/default.yaml"
-  >> fs.readFileSync
-  >> yaml.safeLoad;
+// initial service state
+export const initialState = {
+  gex: true,
+  log: {
+    level: "info"
+  },
+  clients: [
+    {
+      pattern: {},
+      module: "patmos-default-client"
+    }
+  ]
+};
 
 /**
  * Patmos service
@@ -19,40 +29,31 @@ export const defaults = "./config/default.yaml"
  * @param  {object} state
  * @return {object}
  */
-const Patmos = function (state = {}) {
+export const Patmos = function (state = initialState) {
+  const chain = passThrough(Patmos);
+
   const spec = {
     add: chain(add),
     attach: chain(attach),
     exec: exec,
     expose: chain(expose),
     find: find,
+    getState: getState,
+    getStore: getStore,
     has: has,
     list: list,
     remove: chain(remove),
     use: chain(use),
   };
 
-  // patrun is mutable, replace store to avoid side effects
-  const store = patrun({gex: state.gex});
+  const newState = state
+    >> createStore;
 
-  // add methods to store
-  if (state.methods) {
-    state.methods
-      >> map(fromConfig)
-      >> forEach(args => apply(store.add, args))
-  }
-
-  // add/replace old store
-  const newState = R.assoc('store', store, state);
-
-  return spec
-    >> map(f => f(newState))
-    >> assoc('state', newState);
+  return spec >> map(f => partial(f, [newState]));
 }
 
 //
-const fromConfig = function (config) {
-  let pattern = config.pattern || {};
+const locateMethod = function (config) {
   let module = config.module;
 
   // load node module if defined
@@ -84,7 +85,26 @@ const fromConfig = function (config) {
     method = module.default;
   }
 
-  return [pattern, method];
+  return method;
+}
+
+/**
+ * alias for over with some helpers
+ */
+const updateIn = function (path, ...args) {
+  const updater = over << lensPath(path);
+
+  return apply(updater, args);
+}
+
+
+/**
+ * alias for over with some helpers
+ */
+const update = function (prop, ...args) {
+  const updater = over << lensProp(prop);
+
+  return apply(updater, args);
 }
 
 /**
@@ -96,11 +116,7 @@ const fromConfig = function (config) {
  * @return {type}
  */
 const add = curry << function (state, pattern, method) {
-  const transform = evolve({
-    methods: append({pattern, method})
-  });
-
-  return transform(state);
+  return state >> update('methods', append({pattern, method}));
 }
 
 /**
@@ -111,49 +127,54 @@ const add = curry << function (state, pattern, method) {
  * @param {type} middleware
  * @return {obejct}
  */
-const attach = curry << function (state, pattern, middleware) {
-  let method = middleware << Patmos(state);
-
-  if (isFunction(method)) {
-    const transform = evolve({
-      clients: append({pattern, method})
-    });
-
-    return transform(state);
-  }
-
-  return state;
-}
-
-
-//
-const chain =  (fn) => (state) => (...args) => {
-  const result = R.apply(fn(state), args);
-
-  return isFunction(result)
-    ? chain(result)
-    : Patmos(result);
+const attach = curry << function (state, pattern, method) {
+  return state >> update('servers', append({pattern, method}));
 }
 
 //
-const exec = curry << function ({ store }, message) {
-  console.log(store.find(message));
+const observableFactory = function (fn) {
+  return fn.length === 2
+    ? Rx.Observable.bindCallback(fn)
+    : fn
+}
+
+//
+const exec = curry << function (state, message) {
+  const reqId = nid(8); // for logging
+
+  log("exec " + reqId + " " + JSON.stringify(message));
+
+  const test = patrun({gex: state.gex}).add(message, true);
+  const service = Patmos(state);
+
+  // init middleware
+  const middlewares = state.middleware
+    >> filter(x => (test.list(x.pattern).length > 0))
+    >> map(x => service >> locateMethod(x));
+
+  log("exec " + reqId + " matched " + middlewares.length + " middlewares");
+
+  const clients = state.clients
+    >> filter(x => (test.list(x.pattern).length > 0))
+    >> map(x => service >> locateMethod(x));
+
+  log("exec " + reqId + " matched " + clients.length + " clients")
+
+  const stream = middlewares
+    >> map(([ req, res ]) => observableFactory(req));
+    
+  //const res = await prom;
+
+  //console.log('res', res);
+
+  //const responses = middleware
+  //console.log('fn', store.find(message));
 
   return message;
 }
 
-const expose = curry << function (state, pattern, middleware) {
-  let method = middleware << Patmos(state);
-
-  if (isFunction(method)) {
-    const transform = evolve({
-      servers: append({pattern, method})
-    });
-
-    return transform(state);
-  }
-
-  return state;
+const expose = curry << function (state, pattern, method) {
+  //return state >> update('servers', append({pattern, method}));
 }
 
 /**
@@ -163,8 +184,45 @@ const expose = curry << function (state, pattern, middleware) {
  * @param {string} pattern
  * @return {function}
  */
-const find = curry << function ({ store }, pattern) {
-  return store.find(pattern)
+const find = curry << function (state, pattern) {
+  return getStore(state).find(pattern)
+}
+
+/**
+ * getState - gets the current service state with the store removed
+ *
+ * @param {obejct} state
+ * @return {function}
+ */
+const getState = (state) => {
+  return dissoc("_store", state);
+}
+
+/**
+ * getStore - gets or creates the patrun store from state;
+ *
+ * @param {obejct} state
+ * @return {function}
+ */
+const getStore = function (state) {
+  return state._store || createStore(state)._store;
+}
+
+/**
+ * createStore - creates the patrun store from state methods
+ */
+const createStore = function (state) {
+  // patrun is mutable, replace store to avoid side effects
+  const store = patrun({gex: state.gex});
+
+  // add methods to store
+  if (state.methods) {
+    state.methods
+      >> map(locateMethod)
+      >> forEach(args => apply(store.add, args))
+  }
+
+  return state >> assoc("_store", store);
 }
 
 /**
@@ -174,9 +232,14 @@ const find = curry << function ({ store }, pattern) {
  * @param {type} pattern
  * @return {boolean}
  */
-const has = curry << function ({ store }, pattern) {
-  return !!store.find(pattern)
+const has = curry << function (state, pattern) {
+  return !!getStore(state).find(pattern)
 }
+
+/**
+ * isFunction
+ */
+const isFunction = is(Function);
 
 /**
  * list- list methods by a pattern subset
@@ -185,8 +248,26 @@ const has = curry << function ({ store }, pattern) {
  * @param {type} pattern
  * @return {array}
  */
-const list = curry << function ({ store }, pattern) {
-  return store.list(pattern);
+const list = curry << function (state, pattern) {
+  return getStore(state).list(pattern);
+}
+
+//
+const log = function (...args) {
+  apply(console.log, args);
+}
+
+/**
+ * yup, this...
+ */
+const passThrough = curry << function (target, fn) {
+  return (...args) => {
+    const result = apply(fn, args);
+
+    return isFunction(result)
+      ? passThrough(result)
+      : target(result);
+  }
 }
 
 /**
@@ -197,11 +278,7 @@ const list = curry << function ({ store }, pattern) {
  * @return {object}
  */
 const remove = curry << function (state, pattern) {
-  const transform = evolve({
-    methods: filter(x => !equals(x,  pattern))
-  });
-
-  return transform(state);
+  return state >> update("methods", filter(x => !equals(x.pattern,  pattern)));
 }
 
 /**
@@ -212,69 +289,52 @@ const remove = curry << function (state, pattern) {
  * @param {type} middleware
  * @return {obejct}
  */
-const use = curry << function (state, pattern, middleware) {
-  let method = middleware << Patmos(state);
-
-  if (isFunction(method)) {
-    const transform = evolve({
-      middleware: append({pattern, method})
-    });
-
-    return transform(state);
-  }
-
-  return state;
+const use = curry << function (state, pattern, method) {
+  return state >> update('middleware', append({pattern, method}));
 }
 
-//
+// service factor
 const factory = function (config) {
-  return Patmos << merge(defaults, config);
+  return Patmos << merge(initialState, config);
 }
 
 export default factory;
 
-(serivice) => {
-
-  return [
-    (handleRequest),
-    handleResponse
-  ]
-}
-
-//
-// exec message
-// find middleware
-// execute middleware request
-// return middleware modified request
-// send middleware request
-// execute middleware response
-// return middleware modified response;
-
-// middleware example
-(service) => [
-  async (req) => {
-    // prevent recursion
-    if (req.role === 'middleware' && cmd === 'timestamp') {
-      return;
-    }
-
-    let {result} = await scope.exec({role: 'middleware', cmd: 'timestamp'});
-    let sentAt = result;
-
-    if (!sentAt) {
-      sentAt = Date.now();
-    }
-
-    return Object.assign(req, {sentAt});
+const callbackmw = (service) => [
+  (req, callback) => {
+    console.log('req 1', req);
+    callback(assoc("req1", true, req));
   },
   async (res) => {
-    let {result} = await scope.exec({role: 'middleware', cmd: 'timestamp'});
-    let recievedAt = result;
-
-    if (!recievedAt) {
-      recievedAt = Date.now();
-    }
-
-    return Object.assign(res, {sentAt, recievedAt});
+    console.log('res 1');
+    callback(assoc("res", true, res));
   }
 ];
+
+// example middleware spec
+const promisemw = (service) => [
+  async (req) => {
+    console.log('req 2', req);
+    return assoc("req2", true, req);
+  },
+  async (res) => {
+    console.log('res 2');
+    return assoc("res", true, res);
+  }
+];
+
+const client = (service) => (req) => {
+  return {body: "hello world"};
+}
+
+let service = factory()
+  .add({a: 1}, () => "howdy")
+  .use({}, callbackmw)
+  .use({a: '*'}, promisemw)
+  .attach({}, client);
+
+//console.log(service.getState());
+
+service.exec({a: 1, body: "hi"});
+
+// middleware
