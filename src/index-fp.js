@@ -1,19 +1,26 @@
-// babel operator overload
+require("source-map-support").install();
+
 import fs from "fs";
 import path from "path";
 import patrun from "patrun";
 import nid from "nid";
+
 import R, {__, apply, append, assoc, curry, dissoc, equals, evolve, filter, forEach,
   head, is, lens, lensPath, lensProp, map, merge, tail, transpose, reduce, over,
   partial, prop, tap } from "ramda";
-import Rx from 'rxjs/Rx';
+
+import Rx from 'rx';
 import yaml from "js-yaml";
+
+//
+import log from "./lib/logger";
+
 
 // initial service state
 export const initialState = {
   gex: true,
   log: {
-    level: "info"
+    level: "silly"
   },
   clients: [
     {
@@ -31,6 +38,8 @@ export const initialState = {
  */
 export const Patmos = function (state = initialState) {
   const chain = passThrough(Patmos);
+
+  log.level = state.log.level;
 
   const spec = {
     add: chain(add),
@@ -92,19 +101,14 @@ const locateMethod = function (config) {
  * alias for over with some helpers
  */
 const updateIn = function (path, ...args) {
-  const updater = over << lensPath(path);
-
-  return apply(updater, args);
+  return apply(over(lensPath(path)), args);
 }
-
 
 /**
  * alias for over with some helpers
  */
 const update = function (prop, ...args) {
-  const updater = over << lensProp(prop);
-
-  return apply(updater, args);
+  return apply(over(lensProp(prop)), args);
 }
 
 /**
@@ -132,18 +136,22 @@ const attach = curry << function (state, pattern, method) {
 }
 
 //
-const observableFactory = function (fn) {
-  return fn.length === 2 ? Rx.Observable.bindCallback(fn) : fn;
+const createObservable = function (fn) {
+  return fn.length === 2
+    ? Rx.Observable.fromNodeCallback(fn)
+    : (...args) => Rx.Observable.fromPromise(apply(fn, args));
 }
 
 //
-const mergeStream = (stream, fn) => stream.mergeMap(val => fn(val));
+const concatMapReducer = (stream, factory) => {
+  return stream.concatMap((val, i) => factory(val, i));
+}
 
 //
 const exec = curry << async function (state, message) {
   const reqId = nid(8); // for logging
 
-  log("exec " + reqId + " " + JSON.stringify(message));
+  log.info("exec " + reqId + " " + JSON.stringify(message));
 
   const test = patrun({gex: state.gex}).add(message, true);
   const service = Patmos(state);
@@ -153,40 +161,78 @@ const exec = curry << async function (state, message) {
     >> filter(x => (test.list(x.pattern).length > 0))
     >> map(x => service >> locateMethod(x));
 
-  log("exec " + reqId + " matched " + middlewares.length + " middlewares");
+  log.silly("exec " + reqId + " matched " + middlewares.length + " middlewares");
 
+  //
+  const prepareRequest = middlewares
+    >> filter(([ req ]) => isFunction(req))
+    >> map(([ req ]) => (val, i) => {
+      const fn = createObservable(req);
+
+      return Rx.Observable.just(fn)
+        .flatMap(fn => {
+          log.silly("exec " + reqId + " request middleware " + JSON.stringify(val));
+
+          return fn(val)
+        })
+        .catch(e => {
+          log.error("exec " + reqId + " request middleware error " + e.toString());
+
+          return Rx.Observable.of(val);
+        });
+    })
+    >> reduce(concatMapReducer, Rx.Observable.of(message));
+
+  const request = await prepareRequest.toPromise();
+
+  log.debug("request " + reqId + " " + JSON.stringify(message));
+
+  // init clients
   const clients = state.clients
     >> filter(x => (test.list(x.pattern).length > 0))
     >> map(x => service >> locateMethod(x));
 
-  log("exec " + reqId + " matched " + clients.length + " clients")
- 
-  //
-  const prepareRequest = middlewares
-    >> map(([ req ]) => observableFactory(req))
-    >> reduce(mergeStream, Rx.Observable.of(message)); 
-    
-  const request = await prepareRequest.toPromise(); 
-
-  console.log('request', request);
+  log.silly("exec " + reqId + " matched " + clients.length + " clients")
 
   //
   const getResponse = clients
-    >> map((req) => observableFactory(req))
-    >> reduce(mergeStream, Rx.Observable.of(request));
+    >> filter(req => isFunction(req))
+    >> map(req => (val, i) => {
+      const fn = createObservable(req);
+
+      return Rx.Observable.just(fn)
+        .flatMap(fn => fn(val))
+        .catch(Rx.Observable.of(val))
+    })
+    >> reduce(concatMapReducer, Rx.Observable.of(request));
 
   const response = await getResponse.toPromise();
-  
-  console.log('response', response);
+
+  log.debug("response " + reqId + " " + JSON.stringify(response));
 
   //
   const prepareResponse = middlewares
-    >> map(([ _, res ]) => observableFactory(res))
-    >> reduce(mergeStream, Rx.Observable.of(response)); 
-  
+    >> filter(([ _, res ]) => isFunction(res))
+    >> map(([ _, res ]) => (val, i) => {
+      const fn = createObservable(res);
+
+      return Rx.Observable.just(fn)
+        .flatMap(fn => {
+          log.silly("exec " + reqId + " response middleware " + JSON.stringify(val));
+
+          return fn(val)
+        })
+        .catch(e => {
+          log.error("exec " + reqId + " response middleware error " + e.toString());
+
+          return Rx.Observable.of(val);
+        })
+    })
+    >> reduce(concatMapReducer, Rx.Observable.of(response));
+
   const result = await prepareResponse.toPromise();
 
-  console.log('result', result);
+  log.info("result " + reqId + " " + JSON.stringify(result));;
 
   return result;
 }
@@ -270,11 +316,6 @@ const list = curry << function (state, pattern) {
   return getStore(state).list(pattern);
 }
 
-//
-const log = function (...args) {
-  apply(console.log, args);
-}
-
 /**
  * yup, this...
  */
@@ -318,25 +359,22 @@ const factory = function (config) {
 
 export default factory;
 
+//
 const callbackmw = (service) => [
   (req, callback) => {
-    console.log('req 1', req);
-    callback(assoc("req1", true, req));
+    callback("errrror", assoc("req1", true, req));
   },
   (res, callback) => {
-    console.log('res 1');
-    callback(assoc("res", true, res));
+    callback("Error 2", assoc("res", true, res));
   }
 ];
 
 // example middleware spec
 const promisemw = (service) => [
   async (req) => {
-    console.log('req 2', req);
     return assoc("req2", true, req);
   },
   async (res) => {
-    console.log('res 2');
     return assoc("res", true, res);
   }
 ];
@@ -347,12 +385,24 @@ const client = (service) => async (req) => {
 
 let service = factory()
   .add({a: 1}, () => "howdy")
-  .use({}, callbackmw)
-  .use({a: '*'}, promisemw)
+  .use({}, promisemw)
+  .use({a: '*'}, callbackmw)
   .attach({}, client);
 
 //console.log(service.getState());
 
-service.exec({a: 1, body: "hi"});
+
+const main = async function () {
+  try {
+   let result = await service.exec({a: 1, body: "hi"});
+  }
+  catch (e) {
+    console.log(e.stack.toString());
+  }
+}
+
+main();
+
+
 
 // middleware
