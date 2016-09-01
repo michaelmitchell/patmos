@@ -17,7 +17,7 @@ export default new winston.Logger({
 
         let metadata = (options.meta && Object.keys(options.meta).length ? "\n" + util.inspect(options.meta, {depth: null, colors: true}) : "");
 
-        return "[" + options.timestamp() +"] " + level + " " + message + metadata;
+        return "[" + options.timestamp() +"] [" + level + "] " + message + metadata;
       }
     })
   ]
