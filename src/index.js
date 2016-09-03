@@ -1,372 +1,347 @@
-// modules
-import _ from "lodash";
-import fs from "fs";
-import nid from "nid";
-import patrun from "patrun";
-import yaml from "js-yaml";
+require('source-map-support').install();
 
-// helpers
-import { method_name, pattern_name } from "./lib/common";
-import { scopify, scopify_chainable } from "./lib/scope";
-import { load_all_from_config } from "./lib/config";
-import logger from "./lib/logger";
+import patrun from 'patrun';
+import nid from 'nid';
+import { append, assoc, curry, defaultTo, dissoc, equals, filter, forEach, map, merge, reduce, partial } from 'ramda';
+import Rx from 'rx';
 
-// load default config
-export const defaults = yaml.safeLoad(fs.readFileSync("./config/default.yaml"));
+//
+import { catchReducer, concatMapReducer, createObservable, findMethod, isFunction, passThrough, update, updateIn } from './lib/helpers';
+import log from './lib/log';
 
-// different scope tyopes
-export const SCOPE_CLIENT = "client";
-export const SCOPE_DEFAULT = "default";
-export const SCOPE_MIDDLEWARE = "middleware";
-export const SCOPE_SERVER = "server";
+// initial service state
+export const initialState = {
+  gex: true,
+  log: {
+    level: 'info'
+  }
+};
 
 /**
+ * Patmos service
  *
+ * @param  {object} state
+ * @return {object}
  */
-export class Patmos {
+export const Patmos = function (state = initialState, pattern = {}) {
+  const toChain = passThrough(Patmos);
+  const scoped = applyPatternScope(pattern);
 
-  /**
-   * constructor - description
-   *
-   * @param  {type} options
-   * @return {type}
-   */
-  constructor(options) {
-    this.options = _.assign(defaults, options);
+  //@NOTE SIDE_EFFECT
+  log.level = state.log.level;
 
-    //
-    this.log = logger;
-    this.log.level = this.options.log.level;
+  // service functions that will be injected with state
+  const spec = {
+    add: add >> scoped >> toChain,
+    attach: attach >> scoped >> toChain,
+    dispatch: dispatch >> scoped,
+    exec: exec >> scoped,
+    expose: expose >> scoped >> toChain
+    find: find >> scoped,
+    getState: getState,
+    getStore: getStore,
+    has: has >> scoped,
+    list: list >> scoped,
+    remove: remove >> scoped >> toChain
+    use: use >> scoped >> toChain
+  };
 
-    // method store
-    this.store = patrun({gex: this.options.gex});
+  // util functions with no injected state
+  const util = {
+    log: log
+  };
 
-    // middleware
-    this.clients = [];
-    this.middleware = [];
+  // @NOTE SIDE_EFFECT
+  const newState = state
+    >> createStore;
 
-    this.log.info("init");
+  // put everything together
+  return spec
+    >> map(f => partial(f, [newState]))
+    >> merge(util);
+};
 
-    load_all_from_config(this.scope(), options);
+/**
+ * add - add a method to the service
+ *
+ * @param {obejct} state
+ * @param  {type} pattern
+ * @param  {type} method
+ * @return {type}
+ */
+export const add = curry << function (state, pattern, method) {
+  return update('methods', append({pattern, method}), state);
+};
 
-    this.log.info("init complete");
+//
+export const applyPatternScope = curry << function(scope, fn) {
+  return (...args) => {
+    const [state, pattern, ...rest] = args;
+    return fn(state, merge(pattern, scope), ...rest);
+  };
+};
+
+/**
+ * attach - apply a client
+ *
+ * @param {obejct} state
+ * @param {type} pattern
+ * @param {type} middleware
+ * @return {obejct}
+ */
+export const attach = curry << function (state, pattern, method) {
+  return state >> update('clients', append({pattern, method}));
+};
+
+/**
+ * createStore - creates the patrun store from state methods\
+ */
+export const createStore = function (state) {
+  // patrun is mutable, replace store to avoid side effects
+  const store = patrun({gex: state.gex});
+
+  //@NOTE SIDE_EFFECT add methods to store
+  defaultTo([], state.methods)
+    >> forEach(x => {
+      store.add(x.pattern, findMethod(x));
+    });
+
+  return state >> assoc('_store', store);
+};
+
+//
+export const exec = curry << function (state, message) {
+  const fn = find(state, message);
+
+  if (isFunction(fn)) {
+    const observable = message
+      >> createObservable(fn);
+
+    return observable.toPromise();
   }
 
-  /**
-   * add - add a method to the service
-   *
-   * @param  {type} pattern
-   * @param  {type} method
-   * @return {type}
-   */
-  add(pattern, method) {
-    this.log.info("add " + method_name(method) + " " + pattern_name(pattern));
+  return Promise.resolve();
+};
 
-    //@TODO
-    // - validate pattern
-    // - check existing pattern
-    // - validate method
-    //
-    this.store.add(pattern, method);
+//
+export const dispatch = curry << async function (state, message) {
+  const reqId = nid(8); // for logging
 
-    return this;
-  }
+  log.info('dispatch ' + reqId + ' ' + JSON.stringify(message));
 
-  /**
-   * attach - apply a client middleware
-   *
-   * @param  {type} pattern
-   * @param  {type} middleware
-   * @return {type}
-   */
-  attach(pattern, middleware) {
-    if (!middleware) {
-      middleware = pattern;
-      pattern = {};
-    }
+  const test = patrun({gex: state.gex}).add(message, true);
+  const service = getServiceForDispatch(state, message);
 
-    this.log.info("attach " + method_name(middleware) + " " + pattern_name(pattern));
+  // init middleware
+  const middlewares = defaultTo([], state.middleware)
+    >> filter(x => (test.list(x.pattern).length > 0))
+    >> map(x => service(x) >> findMethod(x));
 
-    let scope = this.scope(pattern, SCOPE_CLIENT);
-    let fn = middleware(scope);
+  log.silly('dispatch ' + reqId + ' matched ' + middlewares.length + ' middlewares');
 
-    // only add middleware that returns a function
-    if (typeof fn === "function") {
-      this.clients.push([pattern, fn]);
-    }
+  // prepare request by applying middleware in series
+  const prepareRequest = middlewares
+    >> filter(([ req ]) => isFunction(req))
+    >> map(([ req ]) => (val, i) => {
+      const fn = createObservable(req);
 
-    return this;
-  }
+      return Rx.Observable.just(fn)
+        .flatMap(fn => {
+          log.silly('dispatch ' + reqId + ' request middleware before ' + JSON.stringify(val));
 
-  /**
-   * run
-   *
-   * @async
-   * @param  {type} message
-   * @return {type}
-   */
-  async exec(message) {
-    let requestId = nid(8); // for logging
+          return fn(val);
+        })
+        .tap(val => {
+          log.silly('dispatch ' + reqId + ' request middleware after ' + JSON.stringify(val));
+        })
+        .catch(e => {
+          log.error('dispatch ' + reqId + ' request middleware error ' + e.toString());
 
-    this.log.info("exec " + requestId + " " + JSON.stringify(message));
+          return Rx.Observable.of(val);
+        });
+    })
+    >> reduce(concatMapReducer, Rx.Observable.of(message));
 
-    //reverse pattern match for middleware
-    let test = patrun({gex: this.options.gex}).add(message, true);
+  // execute request middleware stream
+  const request = await prepareRequest.toPromise();
 
-    //
-    let requests = [];
+  // find clients that match the message
+  const clients = defaultTo([], state.clients)
+    >> filter(x => (test.list(x.pattern).length > 0))
+    >> map(x => service(x) >> findMethod(x));
 
-    // partial match middleware
-    for (let [pattern, middleware] of this.middleware) {
-      if (test.list(pattern).length > 0) {
-        requests.push(middleware);
+  log.silly('dispatch ' + reqId + ' matched ' + clients.length + ' clients');
+  log.debug('dispatch ' + reqId + ' request ' + JSON.stringify(request));
+
+  // returns response from first client to succeed
+  const getResponse = clients
+    >> append((req) => exec)
+    >> filter(req => isFunction(req))
+    >> map(req => {
+      const fn = createObservable(req);
+
+      return Rx.Observable.just(fn)
+        .flatMap(fn => {
+          log.silly('dispatch ' + reqId + ' client request ' + JSON.stringify(request));
+
+          return fn(request);
+        })
+        .retry(3)
+        .tap(res => {
+          log.silly('dispatch ' + reqId + ' client response ' + JSON.stringify(res));
+        }, err => {
+          log.silly('dispatch ' + reqId + ' client error ' + JSON.stringify(err));
+        });
+    })
+    >> reduce(catchReducer, Rx.Observable.throw(request));
+
+  // execute client stream or returns nothing if they all fail
+  const response = await getResponse
+    .onErrorResumeNext(Rx.Observable.return())
+    .toPromise();
+
+  log.debug('dispatch ' + reqId + ' response ' + JSON.stringify(response));
+
+  // prepare response by applying middleware in series
+  const prepareResponse = middlewares
+    >> filter(([ _, res ]) => isFunction(res))
+    >> map(([ _, res ]) => (val, i) => {
+      const fn = createObservable(res);
+
+      return Rx.Observable.just(fn)
+        .flatMap(fn => {
+          log.silly('dispatch ' + reqId + ' response middleware before ' + JSON.stringify(val));
+
+          return fn(val);
+        })
+        .tap(val => {
+          log.silly('dispatch ' + reqId + ' response middleware after ' + JSON.stringify(val));
+        })
+        .catch(e => {
+          log.error('dispatch ' + reqId + ' response middleware error ' + e.toString());
+
+          return Rx.Observable.of(val);
+        });
+    })
+    >> reduce(concatMapReducer, Rx.Observable.of(response));
+
+  // execute response middleware stream
+  const result = await prepareResponse.toPromise();
+
+  log.info('dispatch ' + reqId + ' result ' + JSON.stringify(result));
+
+  return result;
+};
+
+//
+export const expose = curry << function (state, pattern, method) {
+  const service  = Patmos(state, pattern);
+
+  method(service); // initiate server
+
+  return update('servers', append({pattern, method}), state);
+};
+
+/**
+ * find - find a method by a specific pattern
+ *
+ * @param {obejct} state
+ * @param {string} pattern
+ * @return {function}
+ */
+export  const find = curry << function (state, pattern) {
+  return getStore(state).find(pattern);
+};
+
+/**
+ * getState - gets the current service state with the store removed
+ *
+ * @param {obejct} state
+ * @return {function}
+ */
+const getState = (state) => {
+  return dissoc('_store', state);
+};
+
+/**
+ * getStore - gets or creates the patrun store from state;
+ *
+ * @param {obejct} state
+ * @return {function}
+ */
+const getStore = function (state) {
+  return state._store || createStore(state)._store;
+};
+
+
+// gets a middleware service with safe exec function replacement and limited scope
+const getServiceForDispatch = curry << function (state, message, { pattern }) {
+  const test = patrun({gex: state.gex}).add(message, true);
+  const service = Patmos(state, pattern);
+
+  if (test.list(pattern).length > 0) {
+    return merge(service, {
+      // can execute outside of the service pattern scope
+      __dangerouslyDispatch: dispatch(state),
+
+      // prevent accidental recursion inside of middleware
+      dispatch: () => {
+        log.error('exec inside a superset of the middleware pattern is not allowed, use  __dangerouslyDispatch instead. ' + JSON.stringify({pattern, message}));
       }
-    }
-
-    this.log.silly("exec " + requestId + " matched " + requests.length + " request middlewares");
-
-    //
-    let clients = [];
-
-    // partial match client middleware
-    for (let [pattern, middleware] of this.clients) {
-      if (test.list(pattern).length > 0) {
-        clients.push(middleware);
-      }
-    }
-
-    this.log.silly("exec " + requestId + " matched " + clients.length + " client middlewares");
-
-    //
-    let responses = [];
-
-    // apply request middleware
-    for (let request of requests) {
-      try {
-        let response = await request(message);
-
-        if (typeof response === "function") {
-          responses.push(response);
-        }
-      }
-      catch (e) {
-        this.log.error("exec " + requestId, e);
-        throw e; // rethrow error
-      }
-    }
-
-    this.log.debug("request " + requestId + " " + JSON.stringify(message));
-    this.log.silly("request " + requestId + " has " + responses.length + " response middlewares");
-
-    // default
-    let result = null;
-    let i = 1;
-
-    for (let request of clients) {
-      try {
-        let response = await request(message);
-
-        if (typeof response === "function") {
-          result = await response(result) || null;
-
-          if (result !== null) {
-            this.log.silly("response was returned by client middleware " + i);
-            break; // first result is used
-          }
-        }
-
-        i++;
-      }
-      catch (e) {
-        this.log.error("request " + requestId, e);
-        throw e; // rethrow error
-      }
-    }
-
-    this.log.debug("response " + requestId + " " + JSON.stringify(result));
-
-    // apply response middleware before returning
-    if (result) {
-      for (let response of responses) {
-        try {
-          await response(result);
-        }
-        catch (e) {
-          this.log.error("response " + requestId, e);
-          throw e; // rethrow error
-        }
-      }
-    }
-
-    this.log.info("result " + requestId + " " + JSON.stringify(result));
-
-    return result;
+    });
   }
 
-  /**
-   * expose - add a server middleware
-   *
-   * @param  {type} pattern
-   * @param  {type} middleware
-   * @return {type}
-   */
-  expose(pattern, middleware) {
-    if (!middleware) {
-      middleware = pattern;
-      pattern = {};
-    }
+  return service;
+};
 
-    this.log.info("expose " + method_name(middleware) + " " + pattern_name(pattern));
+/**
+ * has - check if a method exists
+ *
+ * @param {obejct} state
+ * @param {type} pattern
+ * @return {boolean}
+ */
+const has = curry << function (state, pattern) {
+  return !!getStore(state).find(pattern);
+};
 
-    let scope = this.scope(pattern, SCOPE_SERVER);
+/**
+ * list- list methods by a pattern subset
+ *
+ * @param {obejct} state
+ * @param {type} pattern
+ * @return {array}
+ */
+const list = curry << function (state, pattern) {
+  return getStore(state).list(pattern);
+};
 
-    middleware(scope);
+/**
+ * remove - remove a method from the service
+ *
+ * @param {obejct} state
+ * @param {type} pattern
+ * @return {object}
+ */
+const remove = curry << function (state, pattern) {
+  return update('methods', filter(x => !equals(x.pattern,  pattern)), state);
+};
 
-    return this;
-  }
+/**
+ * use - apply a middleware
+ *
+ * @param {obejct} state
+ * @param {type} pattern
+ * @param {type} middleware
+ * @return {obejct}
+ */
+const use = curry << function (state, pattern, method) {
+  return update('middleware', append({pattern, method}), state);
+};
 
-  /**
-   * find - find a method by a specific pattern
-   *
-   * @param  {type} pattern
-   * @return {type}
-   */
-  find(pattern) {
-    return this.store.find(pattern);
-  }
-
-  /**
-   * has - check if a local method exists
-   *
-   * @param  {type} pattern description
-   * @return {type}         description
-   */
-  has(pattern) {
-    return !!this.store.find(pattern);
-  }
-
-  /**
-   * list- list methods by a pattern subset
-   *
-   * @param  {type} pattern
-   * @return {type}
-   */
-  list(pattern) {
-    return this.store.list(pattern);
-  }
-
-  /**
-   * remove - remove a method from the service
-   *
-   * @param  {type} pattern description
-   * @return {type}         description
-   */
-  remove(pattern) {
-    this.log.info("remove " + pattern_name(pattern));
-
-    this.store.remove(pattern);
-
-    return this;
-  }
-
-  /**
-   * store - create pattern scoped functions
-   *
-   * @param  {type} pattern description
-   * @return {type}         description
-   */
-  scope(pattern = {}, type = SCOPE_DEFAULT) {
-    // init scope
-    let scope = {
-      parent: this, // access to parent scope
-      type: type, // to test the scope type
-      pattern: pattern, // the pattern this scope is tied to
-      log: this.log // easier access to logging functions
-    };
-
-    // scopified api functions
-    let api = {
-      add: (...args) => scopify_chainable(this.add, scope, args),
-      attach: (p, m) => scopify_chainable(this.attach, scope, m ? [p, m] : [{}, p]),
-      expose: (p, m) => scopify_chainable(this.expose, scope, m ? [p, m] : [{}, p]),
-      find: (...args) => scopify(this.find, scope, args),
-      has: (...args) => scopify(this.has, scope, args),
-      list: (...args) => scopify(this.list, scope, args),
-      remove: (...args) => scopify_chainable(this.remove, scope, args),
-      scope: (...args) => scopify(this.scope, scope, args),
-      use: (p, m) => scopify_chainable(this.use, scope, m ? [p, m] : [{}, p])
-    };
-
-    //
-    switch (type) {
-    case SCOPE_DEFAULT:
-        // default scope includes all scopified api methods
-      _.assign(scope, api, {
-        exec: (...args) => scopify(this.exec, scope, args)
-      });
-      break;
-      // server middleware limited scope and scopified exec method
-    case SCOPE_SERVER:
-      _.assign(scope, _.pick(api, ["add", "attach", "find", "has", "list", "remove", "use"]), {
-        exec: (...args) => scopify(this.exec, scope, args)
-      });
-      break;
-    case SCOPE_CLIENT:
-    case SCOPE_MIDDLEWARE:
-        // middleware gets limited scope
-      _.assign(scope, _.pick(api, ["add", "find", "has", "list", "remove"]), {
-          // middleware exec function is not scopified to prevent recursion
-        exec: async (m) => {
-            // exec cannot be called with a subset of the scopes pattern
-          let test = patrun({gex: this.options.gex}).add(m, true);
-
-          if (test.list(pattern).length > 0) {
-            this.log.warn("executing superset of scope in middleware is not allowed, use __dangerouslyExec instead.", {
-              scope: pattern,
-              message: m
-            });
-          }
-          else {
-            return await this.exec(m);
-          }
-        },
-          // override scope check by using root exec function
-        __dangerouslyExec: this.exec.bind(this)
-      });
-      break;
-    }
-
-    return scope;
-  }
-
-  /**
-   * use - apply a middleware
-   *
-   * @param  {type} pattern
-   * @param  {type} middleware
-   * @return {type}
-   */
-  use(pattern, middleware) {
-    if (!middleware) {
-      middleware = pattern;
-      pattern = {};
-    }
-
-    this.log.info("use " + method_name(middleware) + " " + pattern_name(pattern));
-
-    let scope = this.scope(pattern, SCOPE_MIDDLEWARE);
-    let fn = middleware(scope);
-
-    // only add middleware that returns a request function
-    if (typeof fn === "function") {
-      this.middleware.push([pattern, fn]);
-    }
-
-    return this;
-  }
-}
-
-// export factory
-export default function(options) {
-  return new Patmos(options);
+/**
+ * default factory method for applying config to initial state
+ */
+export default function (config) {
+  return Patmos(merge(initialState, config));
 }
