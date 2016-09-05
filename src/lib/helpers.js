@@ -2,7 +2,7 @@ import R, {apply, curry, is, over, lensPath, lensProp } from 'ramda';
 import Rx from 'rx';
 
 //
-const createObservable = function (fn) {
+export const createObservable = function (fn) {
   return fn.length === 2
     ? Rx.Observable.fromNodeCallback(fn)
     : (...args) => {
@@ -15,12 +15,12 @@ const createObservable = function (fn) {
 };
 
 //
-const catchReducer = (stream, observable) => {
+export const catchReducer = (stream, observable) => {
   return stream.catch(observable);
 };
 
 //
-const concatMapReducer = (stream, factory) => {
+export const concatMapReducer = (stream, factory) => {
   return stream.concatMap(factory);
 };
 

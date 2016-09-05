@@ -36,13 +36,13 @@ export const Patmos = function (state = initialState, pattern = {}) {
     attach: attach >> scoped >> toChain,
     dispatch: dispatch >> scoped,
     exec: exec >> scoped,
-    expose: expose >> scoped >> toChain
+    expose: expose >> scoped >> toChain,
     find: find >> scoped,
     getState: getState,
     getStore: getStore,
     has: has >> scoped,
     list: list >> scoped,
-    remove: remove >> scoped >> toChain
+    remove: remove >> scoped >> toChain,
     use: use >> scoped >> toChain
   };
 
