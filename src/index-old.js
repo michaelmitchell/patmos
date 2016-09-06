@@ -6,9 +6,6 @@ import { append, assoc, curry, defaultTo, dissoc, equals, filter, forEach, map, 
 import Rx from 'rx';
 
 //
-import { chainMethod, chainReducer, method, reducer } from '../lib/as-state';
-
-//
 import { catchReducer, concatMapReducer, createObservable, findMethod, isFunction, passThrough, update, updateIn } from './lib/helpers';
 import log from './lib/log';
 
@@ -21,17 +18,48 @@ export const initialState = {
 };
 
 /**
- * Patmos - description
+ * Patmos service
  *
- * @param  {type} state = initialState description
- * @return {type}                      description
+ * @param  {object} state
+ * @return {object}
  */
-export function Patmos(state = initialState) {
-  this.state = state;
-}
+export const Patmos = function (state = initialState, pattern = {}) {
+  const toChain = passThrough(Patmos);
+  const scoped = applyPatternScope(pattern);
 
-// logging
-Patmos.prototype.log = log;
+  //@NOTE SIDE_EFFECT
+  log.level = state.log.level;
+
+  // service functions that will be injected with state
+  const spec = {
+    add: add >> scoped >> toChain,
+    attach: attach >> scoped >> toChain,
+    dispatch: dispatch >> scoped,
+    exec: exec >> scoped,
+    expose: expose >> scoped >> toChain,
+    find: find >> scoped,
+    getState: getState,
+    getStore: getStore,
+    has: has >> scoped,
+    list: list >> scoped,
+    remove: remove >> scoped >> toChain,
+    use: use >> scoped >> toChain
+  };
+
+  // util functions with no injected state
+  const util = {
+    log: log
+  };
+
+  // @NOTE SIDE_EFFECT
+  const newState = state
+    >> createStore;
+
+  // put everything together
+  return spec
+    >> map(f => partial(f, [newState]))
+    >> merge(util);
+};
 
 /**
  * add - add a method to the service
@@ -41,9 +69,17 @@ Patmos.prototype.log = log;
  * @param  {type} method
  * @return {type}
  */
-Patmos.prototype.add = chainReducer << curry << function (state, pattern, method) {
+export const add = curry << function (state, pattern, method) {
   return update('methods', append({pattern, method}), state);
-}
+};
+
+//
+export const applyPatternScope = curry << function(scope, fn) {
+  return (...args) => {
+    const [state, pattern, ...rest] = args;
+    return fn(state, merge(pattern, scope), ...rest);
+  };
+};
 
 /**
  * attach - apply a client
@@ -53,18 +89,42 @@ Patmos.prototype.add = chainReducer << curry << function (state, pattern, method
  * @param {type} middleware
  * @return {obejct}
  */
-Patmos.prototype.attach = chainReducer << curry << function (state, pattern, method) {
-  return update('clients', append({pattern, method}), state);
-}
+export const attach = curry << function (state, pattern, method) {
+  return state >> update('clients', append({pattern, method}));
+};
 
 /**
- * dispatch - description
- *
- * @param  {type} state   description
- * @param  {type} message description
- * @return {type}         description
+ * createStore - creates the patrun store from state methods\
  */
-Patmos.prototype.dispatch = method << curry << async function (state, message) {
+export const createStore = function (state) {
+  // patrun is mutable, replace store to avoid side effects
+  const store = patrun({gex: state.gex});
+
+  //@NOTE SIDE_EFFECT add methods to store
+  defaultTo([], state.methods)
+    >> forEach(x => {
+      store.add(x.pattern, findMethod(x));
+    });
+
+  return state >> assoc('_store', store);
+};
+
+//
+export const exec = curry << function (state, message) {
+  const fn = find(state, message);
+
+  if (isFunction(fn)) {
+    const observable = message
+      >> createObservable(fn);
+
+    return observable.toPromise();
+  }
+
+  return Promise.resolve();
+};
+
+//
+export const dispatch = curry << async function (state, message) {
   const reqId = nid(8); // for logging
 
   log.info('dispatch ' + reqId + ' ' + JSON.stringify(message));
@@ -171,44 +231,16 @@ Patmos.prototype.dispatch = method << curry << async function (state, message) {
   log.info('dispatch ' + reqId + ' result ' + JSON.stringify(result));
 
   return result;
-}
+};
 
-/**
- * exec - description
- *
- * @param  {type} state   description
- * @param  {type} message description
- * @return {type}         description
- */
-Patmos.prototype.exec = method << curry << function (state, message) {
-  const fn = find(state, message);
+//
+export const expose = curry << function (state, pattern, method) {
+  const service  = Patmos(state, pattern);
 
-  if (isFunction(fn)) {
-    const observable = message
-      >> createObservable(fn);
-
-    return observable.toPromise();
-  }
-
-  return Promise.resolve();
-}
-
-/**
- * expose - description
- *
- * @param  {type} state   description
- * @param  {type} pattern description
- * @param  {type} method  description
- * @return {type}         description
- */
-Patmos.prototype.expose = chainReducer << curry << function (state, pattern, method) {
-  const service = Patmos(state, pattern);
-
-  //@TODO how to handle this?
-  method(this); // initiate server
+  method(service); // initiate server
 
   return update('servers', append({pattern, method}), state);
-}
+};
 
 /**
  * find - find a method by a specific pattern
@@ -217,9 +249,9 @@ Patmos.prototype.expose = chainReducer << curry << function (state, pattern, met
  * @param {string} pattern
  * @return {function}
  */
-Patmos.prototype.find = method << curry << function (state, pattern) {
+export  const find = curry << function (state, pattern) {
   return getStore(state).find(pattern);
-}
+};
 
 /**
  * getState - gets the current service state with the store removed
@@ -227,9 +259,9 @@ Patmos.prototype.find = method << curry << function (state, pattern) {
  * @param {obejct} state
  * @return {function}
  */
-Patmos.prototype.getState = method << function (state) {
+const getState = (state) => {
   return dissoc('_store', state);
-}
+};
 
 /**
  * getStore - gets or creates the patrun store from state;
@@ -237,9 +269,30 @@ Patmos.prototype.getState = method << function (state) {
  * @param {obejct} state
  * @return {function}
  */
-Patmos.prototype.getStore = method << function (state) {
+const getStore = function (state) {
   return state._store || createStore(state)._store;
-}
+};
+
+
+// gets a middleware service with safe exec function replacement and limited scope
+const getServiceForDispatch = curry << function (state, message, { pattern }) {
+  const test = patrun({gex: state.gex}).add(message, true);
+  const service = Patmos(state, pattern);
+
+  if (test.list(pattern).length > 0) {
+    return merge(service, {
+      // can execute outside of the service pattern scope
+      __dangerouslyDispatch: dispatch(state),
+
+      // prevent accidental recursion inside of middleware
+      dispatch: () => {
+        log.error('exec inside a superset of the middleware pattern is not allowed, use  __dangerouslyDispatch instead. ' + JSON.stringify({pattern, message}));
+      }
+    });
+  }
+
+  return service;
+};
 
 /**
  * has - check if a method exists
@@ -248,9 +301,9 @@ Patmos.prototype.getStore = method << function (state) {
  * @param {type} pattern
  * @return {boolean}
  */
-Patmos.prototype.has = method << function (state, pattern) {
+const has = curry << function (state, pattern) {
   return !!getStore(state).find(pattern);
-}
+};
 
 /**
  * list- list methods by a pattern subset
@@ -259,9 +312,9 @@ Patmos.prototype.has = method << function (state, pattern) {
  * @param {type} pattern
  * @return {array}
  */
-Patmos.prototype.list = method << function (state, pattern) {
+const list = curry << function (state, pattern) {
   return getStore(state).list(pattern);
-}
+};
 
 /**
  * remove - remove a method from the service
@@ -270,9 +323,9 @@ Patmos.prototype.list = method << function (state, pattern) {
  * @param {type} pattern
  * @return {object}
  */
-Patmos.prototype.remove = chainReducer << function (state, pattern) {
+const remove = curry << function (state, pattern) {
   return update('methods', filter(x => !equals(x.pattern,  pattern)), state);
-}
+};
 
 /**
  * use - apply a middleware
@@ -282,13 +335,13 @@ Patmos.prototype.remove = chainReducer << function (state, pattern) {
  * @param {type} middleware
  * @return {obejct}
  */
-Patmos.prototype.use = chainReducer << function (state, pattern, method) {
+const use = curry << function (state, pattern, method) {
   return update('middleware', append({pattern, method}), state);
-}
+};
 
 /**
  * default factory method for applying config to initial state
  */
 export default function (config) {
-  return new Patmos(merge(initialState, config));
+  return Patmos(merge(initialState, config));
 }
