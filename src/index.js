@@ -6,10 +6,12 @@ import { append, assoc, curry, defaultTo, dissoc, equals, filter, forEach, map, 
 import Rx from 'rx';
 
 //
-import { chainMethod, chainReducer, method, reducer } from '../lib/as-state';
+import { method, chainMethod, privateMethod, reducer, chainReducer, privateReducer } from '../lib/as-state';
 
 //
-import { catchReducer, concatMapReducer, createObservable, findMethod, isFunction, passThrough, update, updateIn } from './lib/helpers';
+import { catchReducer, concatMapReducer, createObservable, isFunction, update, updateIn } from './lib/helpers';
+
+//
 import log from './lib/log';
 
 // initial service state
@@ -27,10 +29,16 @@ export const initialState = {
  * @return {type}                      description
  */
 export function Patmos(state = initialState) {
-  this.state = state;
+  this.log.level = state.log.level;
+
+  // prepare initial state
+  this.state = state
+    >> Patmos.prototype.createStore
 }
 
-// logging
+/**
+ *
+ */
 Patmos.prototype.log = log;
 
 /**
@@ -58,6 +66,22 @@ Patmos.prototype.attach = chainReducer << curry << function (state, pattern, met
 }
 
 /**
+ * createStore - creates the patrun store from state methods\
+ */
+Patmos.prototype.createStore = privateReducer << function (state) {
+  // patrun is mutable, replace store to avoid side effects
+  const store = patrun({gex: state.gex});
+
+  //@NOTE SIDE_EFFECT add methods to store
+  defaultTo([], state.methods)
+    >> forEach(x => {
+      store.add(x.pattern, this.getMethod(x));
+    });
+
+  return assoc('_store', store, state);
+};
+
+/**
  * dispatch - description
  *
  * @param  {type} state   description
@@ -75,7 +99,7 @@ Patmos.prototype.dispatch = method << curry << async function (state, message) {
   // init middleware
   const middlewares = defaultTo([], state.middleware)
     >> filter(x => (test.list(x.pattern).length > 0))
-    >> map(x => service(x) >> findMethod(x));
+    >> map(x => service(x) >> this.getMethod(x));
 
   log.silly('dispatch ' + reqId + ' matched ' + middlewares.length + ' middlewares');
 
@@ -108,7 +132,7 @@ Patmos.prototype.dispatch = method << curry << async function (state, message) {
   // find clients that match the message
   const clients = defaultTo([], state.clients)
     >> filter(x => (test.list(x.pattern).length > 0))
-    >> map(x => service(x) >> findMethod(x));
+    >> map(x => service(x) >> this.getMethod(x));
 
   log.silly('dispatch ' + reqId + ' matched ' + clients.length + ' clients');
   log.debug('dispatch ' + reqId + ' request ' + JSON.stringify(request));
@@ -202,8 +226,6 @@ Patmos.prototype.exec = method << curry << function (state, message) {
  * @return {type}         description
  */
 Patmos.prototype.expose = chainReducer << curry << function (state, pattern, method) {
-  const service = Patmos(state, pattern);
-
   //@TODO how to handle this?
   method(this); // initiate server
 
@@ -218,7 +240,52 @@ Patmos.prototype.expose = chainReducer << curry << function (state, pattern, met
  * @return {function}
  */
 Patmos.prototype.find = method << curry << function (state, pattern) {
-  return getStore(state).find(pattern);
+  const store = this.getStore(state)
+
+  return store.find(pattern);
+}
+
+
+/**
+ * anonymous function - description
+ *
+ * @param  {type} config description
+ * @return {type}        description
+ */
+Patmos.prototype.getMethod = privateMethod << function (config) {
+  let module = config.module;
+
+  // load node module if defined
+  if (typeof module === 'string') {
+    // include config modules relative to the main module
+    if (module.substr(0, 1) === '.') {
+      let root = path.dirname(require.main.filename);
+
+      module = require(root + '/' + module);
+    }
+    else {
+      module = require(module);
+    }
+
+    if (!module) {
+      throw 'module not found';
+    }
+  }
+
+  //
+  let method = config.method;
+
+  if (module && typeof method === 'string') {
+    method = module[method || 'default'];
+  }
+  else if (module && typeof method === 'object') {
+    method = module[method.name || 'default'].apply({}, method.args || []);
+  }
+  else if (module) {
+    method = module.default;
+  }
+
+  return method;
 }
 
 /**
@@ -238,7 +305,34 @@ Patmos.prototype.getState = method << function (state) {
  * @return {function}
  */
 Patmos.prototype.getStore = method << function (state) {
-  return state._store || createStore(state)._store;
+  return state._store || this.createStore(state)._store;
+}
+
+
+/**
+ * anonymous function - description
+ *
+ * @param  {type} state       description
+ * @param  {type} message     description
+ * @param  {type} { pattern } description
+ * @return {type}             description
+ */
+Patmos.prototype.scope = privateMethod << curry << function (state, message, { pattern }) {
+  const test = patrun({gex: state.gex}).add(message, true);
+
+  if (test.list(pattern).length > 0) {
+    return merge(service, {
+      // can execute outside of the service pattern scope
+      __dangerouslyDispatch: this.dispatch(state),
+
+      // prevent accidental recursion inside of middleware
+      dispatch: () => {
+        log.error('exec inside a superset of the middleware pattern is not allowed, use  __dangerouslyDispatch instead. ' + JSON.stringify({pattern, message}));
+      }
+    });
+  }
+
+  return service;
 }
 
 /**
@@ -249,7 +343,9 @@ Patmos.prototype.getStore = method << function (state) {
  * @return {boolean}
  */
 Patmos.prototype.has = method << function (state, pattern) {
-  return !!getStore(state).find(pattern);
+  const store = this.getStore(state);
+
+  return !!store.find(pattern);
 }
 
 /**
@@ -260,7 +356,9 @@ Patmos.prototype.has = method << function (state, pattern) {
  * @return {array}
  */
 Patmos.prototype.list = method << function (state, pattern) {
-  return getStore(state).list(pattern);
+  const store = this.getStore(state);
+
+  return store.list(pattern);
 }
 
 /**
